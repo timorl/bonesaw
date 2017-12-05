@@ -1,0 +1,6 @@
+__*
+!__init__.py
+*.py[cod]
+*$py.class
+*.npy
+.ipynb_checkpoints
