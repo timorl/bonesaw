@@ -18,21 +18,35 @@ def build_agent():
     model = LReLU(Affine(model, 32))
     model = LReLU(Affine(model, 32))
     model = Affine(model, 1)
+    normalize= RunningNormalize(shape=(2,))
     def policy(obs):
+        obs = normalize.apply(obs)
         actions, _ = model.evaluate(obs)
         return actions
+
+    opt = Adam(
+        np.random.randn(model.n_params),
+        lr=0.01, # 0.05 / 0.01 / 0.02
+        horizon=20, # 40 / 10 / 20 / 5
+    )
+    def sgd_step(traj):
+        traj = traj.modified(observations=normalize)
+        model.load_params(opt.get_value())
+        quiet_actions, backprop = model.evaluate(traj.o)
+        grad = ((traj.a - quiet_actions).T * traj.r.T).T
+        opt.apply_gradient(backprop(grad))
+
+    def randomize_policy():
+        #model.load_params(opt.get_value()*((np.random.rand(model.n_params)*0.05)+0.975))
+        model.load_params(opt.get_value()+((np.random.randn(model.n_params)*0.2)))
+
+    model.randomize_policy = randomize_policy
     model.policy = policy
+    model.sgd_step = sgd_step
     return model
 
 def build_classifier():
-    model = Input(2)
-    model = LReLU(Affine(model, 32))
-    model = LReLU(Affine(model, 32))
-    model = Affine(model, 2)
-    def probabilities(obs):
-        probs, _ = model.evaluate(obs)
-        return softmax(probs)
-    model.probabilities = probabilities
+    model = SimplePredictor(2, 2, classifier=True, normalize_inputs=True)
     return model
 
 def save_plot(file_name, classifier, trajs, *,
@@ -49,7 +63,7 @@ def save_plot(file_name, classifier, trajs, *,
             color=color(t), alpha=0.2, linewidth=2, zorder=1
         )
     plt.imshow(
-        classifier.probabilities(coords)[:,1].reshape(11, 11).T[::-1,:],
+        classifier.predict(coords)[:,1].reshape(11, 11).T[::-1,:],
         zorder=0, aspect="auto", vmin=0.0, vmax=1.0,
         cmap="gray", interpolation="bicubic",
         extent=[np.min(coords[:,0]), np.max(coords[:,0]),
@@ -66,7 +80,7 @@ def softmax(v):
 
 
 def curiosity(world):
-    world = UnboundedActions(world)
+    #world = UnboundedActions(world)
     memory = []
 
     log_dir = "__car"
@@ -74,25 +88,13 @@ def curiosity(world):
         os.mkdir(log_dir)
 
     agent = build_agent()
-    agent_opt = Adams(
-        np.random.randn(agent.n_params),
-        lr=0.000015,
-        horizon=2
-    )
-
     classifier = build_classifier()
-    classifier_opt = Adams(
-        np.random.randn(classifier.n_params),
-        lr=0.000005,
-        horizon=10
-    )
 
-    normalize = RunningNormalize(horizon=10)
+    normalize = RunningNormalize(horizon=200)
 
-    for ep in range(1000):
-        agent.load_params(agent_opt.get_value()*((np.random.rand(agent.n_params)*0.1)+0.95))
-        classifier.load_params(classifier_opt.get_value())
-
+    forplot = []
+    for ep in range(500):
+        agent.randomize_policy()
         agent_traj = episode(world, agent.policy)
         new_memory = Trajectory(agent_traj.o, [[1,0]]*len(agent_traj))
         memory.append(new_memory)
@@ -101,27 +103,25 @@ def curiosity(world):
         remembered_traj = memory[np.random.choice(len(memory))]
         classifier_traj = Trajectory.joined(tagged_traj, remembered_traj)
 
-        classifier_logits, classifier_backprop = classifier.evaluate(classifier_traj.o)
-        grad = (classifier_traj.a - softmax(classifier_logits))
-        classifier_opt.apply_gradient(classifier_backprop(grad))
+        classifier.sgd_step(classifier_traj, lr=0.01)
 
         agent_traj = agent_traj.modified(
-            rewards=lambda r: np.max(classifier.probabilities(agent_traj.o)[:,1])
+            rewards=lambda r: np.max(classifier.predict(agent_traj.o)[:,1])
+            #rewards=lambda r: np.max(agent_traj.o[:,0])
         )
 
-        if ep % 50 == 0:
+        forplot += [tagged_traj, remembered_traj]
+        if len(forplot) >= 10:
             save_plot(
                 log_dir + "/%04d.png" % (ep + 1),
-                classifier, [tagged_traj, remembered_traj]
+                classifier, forplot
             )
+            forplot = []
 
         print(bar(agent_traj.r[0], 1.0))
 
         agent_traj = agent_traj.modified(rewards=normalize)
-        agent.load_params(agent_opt.get_value())
-        agent_quiet_actions, agent_backprop = agent.evaluate(agent_traj.o)
-        grad = ((agent_traj.a - agent_quiet_actions).T * agent_traj.r.T).T
-        agent_opt.apply_gradient(agent_backprop(grad))
+        agent.sgd_step(agent_traj)
 
 def run():
     world = gym.make("MountainCarContinuous-v0")
