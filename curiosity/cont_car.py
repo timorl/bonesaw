@@ -93,21 +93,21 @@ def curiosity(world):
     normalize = RunningNormalize(horizon=200)
 
     forplot = []
-    for ep in range(500):
+    for ep in range(2000):
         agent.randomize_policy()
-        agent_traj = episode(world, agent.policy)
+        agent_traj = episode(world, agent.policy, max_steps=200)
         new_memory = Trajectory(agent_traj.o, [[1,0]]*len(agent_traj))
         memory.append(new_memory)
+        memory = memory[-60:]
 
         tagged_traj = Trajectory(agent_traj.o, [[0,1]]*len(agent_traj))
-        remembered_traj = memory[np.random.choice(len(memory))]
+        remembered_traj = memory[0]
         classifier_traj = Trajectory.joined(tagged_traj, remembered_traj)
 
         classifier.sgd_step(classifier_traj, lr=0.01)
 
         agent_traj = agent_traj.modified(
-            rewards=lambda r: np.max(classifier.predict(agent_traj.o)[:,1])
-            #rewards=lambda r: np.max(agent_traj.o[:,0])
+                rewards=lambda r: np.mean(np.sort(classifier.predict(agent_traj.o)[:,1])[-len(agent_traj)//10:])
         )
 
         forplot += [tagged_traj, remembered_traj]
