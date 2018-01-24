@@ -55,6 +55,23 @@ class GaussDiag(AutogradLayer):
         super().__init__(mean_logstd, f=logprob, n_outputs=1)
         self.sample = sample
 
+class GaussDiagReparametrizationTrick(AutogradLayer):
+    def __init__(self, mean_logstd):
+        import autograd.numpy as np
+
+        rng = np.random.RandomState()
+        space_dim = mean_logstd.n_outputs//2
+
+        def split(mls):
+            return mls.T[:space_dim].T, np.maximum(mls.T[space_dim:].T, -3.)
+
+        def sample(mls):
+            mean, logstd = split(mls)
+            return mean + rng.randn(*mean.shape) * np.exp(logstd)
+
+        super().__init__(mean_logstd, f=sample, n_outputs=space_dim)
+        self.sample = sample
+
 def run():
     mnist = np.load("mnist_simple/__data.npz")
     mnist_train_x = mnist['train_x']
@@ -62,7 +79,7 @@ def run():
     encoder = Affine(Input(28*28), 300)
     encoder = Affine(Tanh(encoder), 2*5)
     dkl = DKLUninormal(encoder)
-    encoded = GaussDiag(encoder)
+    encoded = GaussDiagReparametrizationTrick(encoder)
 
     latent = Input(5)
     decoder = Affine(latent, 300)
@@ -79,7 +96,7 @@ def run():
         encoder.load_params(encOptimizer.get_value())
         decoder.load_params(decOptimizer.get_value())
 
-        representation = encoded.sample(pics)
+        representation, encBackprop = encoded.evaluate(pics)
         changedPics = decoded.sample(representation)
 
         finalLogprob, bckprp = decoded.evaluate(representation, sample=pics)
@@ -89,10 +106,8 @@ def run():
         dklHD, bckprp = dkl.evaluate(pics)
         dklGrad = bckprp(-1.)
         
-        # this is quite right actually
-        _, bckprp = encoded.evaluate(pics, sample=representation-latentGrad)
-        logprobGrad = bckprp(-1.)
-        encOptimizer.apply_gradient(dklGrad + logprobGrad)
+        reparametrizationTrickGrad = encBackprop(latentGrad)
+        encOptimizer.apply_gradient(dklGrad + reparametrizationTrickGrad)
 
         print("Logprob: %f, DKL:%f"%(np.mean(finalLogprob), np.mean(dklHD)))
 
@@ -100,7 +115,7 @@ def run():
             fig, plots = plt.subplots(2)
             plots[0].imshow(changedPics[43].reshape(28,28), cmap="gray")
             plots[1].imshow(pics[43].reshape(28,28), cmap="gray")
-            fig.savefig("MV%05d.png"%i, dpi=100)
+            fig.savefig("MVRT%05d.png"%i, dpi=100)
     
 
 if __name__ == '__main__':
