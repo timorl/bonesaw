@@ -18,7 +18,7 @@ class DKLUninormal(AutogradLayer):
 
         def split(mls):
             space_dim = mls.shape[-1]//2
-            return mls.T[:space_dim].T, np.maximum(mls.T[space_dim:].T, -3.)
+            return mls.T[:space_dim].T, np.clip(mls.T[space_dim:].T, -3., 3.)
 
         def dkl(mls):
             mean, logstd = split(mls)
@@ -38,7 +38,7 @@ class GaussDiag(AutogradLayer):
 
         def split(mls):
             space_dim = mls.shape[-1]//2
-            return mls.T[:space_dim].T, np.maximum(mls.T[space_dim:].T, -3.)
+            return mls.T[:space_dim].T, -3
 
         def sample(obs):
             mean, logstd = split(mean_logstd(obs))
@@ -50,7 +50,7 @@ class GaussDiag(AutogradLayer):
                 np.square((sample - mean) / np.exp(logstd)),
                 axis=-1,
                 keepdims=True
-            ) - (np.sum(logstd) + const)
+            )
 
         super().__init__(mean_logstd, f=logprob, n_outputs=1)
         self.sample = sample

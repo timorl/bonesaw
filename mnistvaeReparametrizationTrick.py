@@ -8,7 +8,7 @@ from matplotlib import pyplot as plt
 sys.path.append("..")
 from mannequin import Adam
 from mannequin.autograd import AutogradLayer
-from mannequin.basicnet import Affine, LReLU, Tanh, Input
+from mannequin.basicnet import Affine, LReLU, Tanh, Input, Layer
 
 class DKLUninormal(AutogradLayer):
     def __init__(self, mean_logstd):
@@ -38,7 +38,7 @@ class GaussDiag(AutogradLayer):
 
         def split(mls):
             space_dim = mls.shape[-1]//2
-            return mls.T[:space_dim].T, np.clip(mls.T[space_dim:].T, -3., -2.)
+            return mls.T[:space_dim].T, -3
 
         def sample(obs):
             mean, logstd = split(mean_logstd(obs))
@@ -50,12 +50,12 @@ class GaussDiag(AutogradLayer):
                 np.square((sample - mean) / np.exp(logstd)),
                 axis=-1,
                 keepdims=True
-            ) - (np.sum(logstd, axis=-1, keepdims=True) + const)
+            )
 
         super().__init__(mean_logstd, f=logprob, n_outputs=1)
         self.sample = sample
 
-class GaussDiagReparametrizationTrick(AutogradLayer):
+class GaussDiagReparametrizationTrickAG(AutogradLayer):
     def __init__(self, mean_logstd):
         import autograd.numpy as np
 
@@ -71,6 +71,30 @@ class GaussDiagReparametrizationTrick(AutogradLayer):
 
         super().__init__(mean_logstd, f=sample, n_outputs=space_dim)
         self.sample = sample
+
+class GaussDiagReparametrizationTrick(Layer):
+    def __init__(self, mean_logstd):
+        import autograd.numpy as np
+
+        rng = np.random.RandomState()
+        space_dim = mean_logstd.n_outputs//2
+
+        def split(mls):
+            return mls.T[:space_dim].T, np.clip(mls.T[space_dim:].T, -3., 3.)
+
+        def evaluate(inps):
+            mls, inner_backprop = mean_logstd.evaluate(inps)
+            mean, logstd = split(mls)
+            sample = rng.randn(space_dim)
+            def backprop(grad):
+                nonlocal logstd
+                logstd = np.reshape(logstd, (-1, space_dim))
+                grad = np.reshape(grad, (-1, space_dim))
+                return inner_backprop(np.concatenate((grad, grad * sample * np.exp(logstd)), axis=-1))
+
+            return mean + sample * np.exp(logstd), backprop
+
+        super().__init__(mean_logstd, evaluate=evaluate, n_outputs=space_dim)
 
 def run():
     mnist = np.load("__mnist.npz")
