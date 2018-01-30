@@ -3,4 +3,5 @@ __*
 *.py[cod]
 *$py.class
 *.npy
+*.png
 .ipynb_checkpoints

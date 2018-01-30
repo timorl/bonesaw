@@ -56,7 +56,7 @@ class GaussDiag(AutogradLayer):
         self.sample = sample
 
 def run():
-    mnist = np.load("mnist_simple/__data.npz")
+    mnist = np.load("__mnist.npz")
     mnist_train_x = mnist['train_x']
 
     encoder = Affine(Input(28*28), 300)
@@ -88,7 +88,7 @@ def run():
 
         dklHD, bckprp = dkl.evaluate(pics)
         dklGrad = bckprp(-1.)
-        
+
         # this is quite right actually
         _, bckprp = encoded.evaluate(pics, sample=representation-latentGrad)
         logprobGrad = bckprp(-1.)
@@ -101,7 +101,7 @@ def run():
             plots[0].imshow(changedPics[43].reshape(28,28), cmap="gray")
             plots[1].imshow(pics[43].reshape(28,28), cmap="gray")
             fig.savefig("MV%05d.png"%i, dpi=100)
-    
+
 
 if __name__ == '__main__':
     run()

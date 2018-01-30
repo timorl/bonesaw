@@ -73,7 +73,7 @@ class GaussDiagReparametrizationTrick(AutogradLayer):
         self.sample = sample
 
 def run():
-    mnist = np.load("mnist_simple/__data.npz")
+    mnist = np.load("__mnist.npz")
     mnist_train_x = mnist['train_x']
 
     encoder = Affine(Input(28*28), 300)
@@ -105,7 +105,7 @@ def run():
 
         dklHD, bckprp = dkl.evaluate(pics)
         dklGrad = bckprp(-1.)
-        
+
         reparametrizationTrickGrad = encBackprop(latentGrad)
         encOptimizer.apply_gradient(dklGrad + reparametrizationTrickGrad)
 
@@ -116,7 +116,7 @@ def run():
             plots[0].imshow(changedPics[43].reshape(28,28), cmap="gray")
             plots[1].imshow(pics[43].reshape(28,28), cmap="gray")
             fig.savefig("MVRT%05d.png"%i, dpi=100)
-    
+
 
 if __name__ == '__main__':
     run()
