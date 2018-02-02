@@ -98,8 +98,8 @@ def run():
 
         if i % 100 == 99:
             fig, plots = plt.subplots(2)
-            plots[0].imshow(changedPics[43].reshape(28,28), cmap="gray")
-            plots[1].imshow(pics[43].reshape(28,28), cmap="gray")
+            plots[0].imshow(changedPics[43].reshape(28,28), cmap="gray", vmin=0, vmax=1)
+            plots[1].imshow(pics[43].reshape(28,28), cmap="gray", vmin=0, vmax=1)
             fig.savefig("MV%05d.png"%i, dpi=100)
 
 
