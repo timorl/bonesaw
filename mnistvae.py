@@ -100,8 +100,10 @@ def run():
             fig, plots = plt.subplots(2)
             plots[0].imshow(changedPics[43].reshape(28,28), cmap="gray", vmin=0, vmax=1)
             plots[1].imshow(pics[43].reshape(28,28), cmap="gray", vmin=0, vmax=1)
-            fig.savefig("MV%05d.png"%i, dpi=100)
+            fig.savefig("step_%05d.png"%(i+1), dpi=100)
 
+        if i % 1000 == 999:
+            np.save("step_%05d_decoder.npy"%(i+1), decoder.get_params())
 
 if __name__ == '__main__':
     run()
