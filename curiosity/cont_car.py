@@ -79,7 +79,8 @@ def curiosity(world):
     agent = build_agent()
     classifier = build_classifier()
 
-    normalize = RunningNormalize(horizon=200)
+    rewNormalize = RunningNormalize(horizon=200)
+    curNormalize = RunningNormalize(horizon=200)
 
     forplot = []
     for ep in range(2000):
@@ -96,7 +97,7 @@ def curiosity(world):
 
         classifier.sgd_step(classifier_traj, lr=0.01)
 
-        agent_traj = agent_traj.modified(
+        agent_traj_curio = agent_traj.modified(
                 rewards=lambda r: classifier.predict(agent_traj.o)[:,0]
         )
 
@@ -108,10 +109,18 @@ def curiosity(world):
             )
             forplot = []
 
-        print(bar(agent_traj.r[0], 1.0))
+        print(bar(np.mean(agent_traj_curio.r), 1.0))
+        print(bar(np.sum(agent_traj.r), 200.))
 
-        agent_traj = agent_traj.discounted(horizon=50)
-        agent_traj = agent_traj.modified(rewards=normalize)
+        agent_traj_curio = agent_traj_curio.discounted(horizon=50)
+        agent_traj_curio = agent_traj_curio.modified(rewards=curNormalize)
+        agent_traj = agent_traj.discounted(horizon=200)
+        agent_traj = agent_traj.modified(rewards=rewNormalize)
+        real_weight=0.5
+        curio_weight=0.5
+        agent_traj = agent_traj.modified(
+                rewards=lambda r: (real_weight*r + curio_weight*agent_traj_curio.r)
+        )
         agent.sgd_step(agent_traj)
 
 def run():
