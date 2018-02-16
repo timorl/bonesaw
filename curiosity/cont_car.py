@@ -37,7 +37,6 @@ def build_agent():
         opt.apply_gradient(backprop(grad))
 
     def randomize_policy():
-        #model.load_params(opt.get_value()*((np.random.rand(model.n_params)*0.05)+0.975))
         model.load_params(opt.get_value()+((np.random.randn(model.n_params)*0.2)))
 
     model.randomize_policy = randomize_policy
@@ -72,17 +71,7 @@ def save_plot(file_name, classifier, trajs, *,
     plt.gcf().set_size_inches(10, 8)
     plt.gcf().savefig(file_name, dpi=100)
 
-def softmax(v):
-    v = v.T
-    v = np.exp(v - np.amax(v, axis=0))
-    v /= np.sum(v, axis=0)
-    return v.T
-
-
 def curiosity(world):
-    #world = UnboundedActions(world)
-    memory = []
-
     log_dir = "__car"
     if not os.path.exists(log_dir):
         os.mkdir(log_dir)
@@ -96,21 +85,22 @@ def curiosity(world):
     for ep in range(2000):
         agent.randomize_policy()
         agent_traj = episode(world, agent.policy, max_steps=200)
-        new_memory = Trajectory(agent_traj.o, [[1,0]]*len(agent_traj))
-        memory.append(new_memory)
-        memory = memory[-60:]
+        generated_traj = Trajectory(
+                list(zip(
+                    np.random.randn(len(agent_traj)) * 0.9 - 0.3,
+                    np.random.randn(len(agent_traj)) * 0.07)),
+                [[1,0]]*len(agent_traj))
 
         tagged_traj = Trajectory(agent_traj.o, [[0,1]]*len(agent_traj))
-        remembered_traj = memory[0]
-        classifier_traj = Trajectory.joined(tagged_traj, remembered_traj)
+        classifier_traj = Trajectory.joined(tagged_traj, generated_traj)
 
         classifier.sgd_step(classifier_traj, lr=0.01)
 
         agent_traj = agent_traj.modified(
-                rewards=lambda r: np.mean(np.sort(classifier.predict(agent_traj.o)[:,1])[-len(agent_traj)//10:])
+                rewards=lambda r: classifier.predict(agent_traj.o)[:,0]
         )
 
-        forplot += [tagged_traj, remembered_traj]
+        forplot += [tagged_traj]
         if len(forplot) >= 10:
             save_plot(
                 log_dir + "/%04d.png" % (ep + 1),
@@ -120,6 +110,7 @@ def curiosity(world):
 
         print(bar(agent_traj.r[0], 1.0))
 
+        agent_traj = agent_traj.discounted(horizon=50)
         agent_traj = agent_traj.modified(rewards=normalize)
         agent.sgd_step(agent_traj)
 
