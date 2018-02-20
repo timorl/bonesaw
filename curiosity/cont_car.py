@@ -12,6 +12,83 @@ if "DEBUG" in os.environ:
 from mannequin import *
 from mannequin.basicnet import *
 from mannequin.gym import *
+from mannequin.backprop import autograd
+from mannequin.distrib import Gauss
+
+def DKLUninormal(*, mean, logstd):
+    @autograd
+    def dkl(mean, logstd):
+        import autograd.numpy as np
+        return 0.5 * (
+            np.sum(
+                np.exp(logstd) - logstd + np.square(mean),
+                axis=-1
+            ) - mean.shape[-1]
+        )
+
+    return Function(mean, logstd, f=dkl, shape=())
+
+def build_vae():
+    LATENT_SIZE=2
+    encoder = Input(2*25)
+    encoder = Tanh(Affine(encoder, 128))
+    encoder = Tanh(Affine(encoder, 128))
+    encoder = Affine(encoder, LATENT_SIZE), Params(LATENT_SIZE)
+
+    dkl = DKLUninormal(mean=encoder[0], logstd=encoder[1])
+    encoder = Gauss(mean=encoder[0], logstd=encoder[1])
+
+    decoder_input = Input(LATENT_SIZE)
+    decoder = Tanh(Affine(decoder_input, 128))
+    decoder = Tanh(Affine(decoder, 128))
+    decoder = Affine(decoder, 2*25)
+    decoder = Gauss(mean=decoder, logstd=Const(np.zeros(50) - 6))
+
+    encOptimizer = Adam(encoder.get_params(), horizon=10, lr=0.01)
+    decOptimizer = Adam(decoder.get_params(), horizon=10, lr=0.01)
+
+    def _train(inps):
+        assert(len(inps.shape) == 2)
+        encoder.load_params(encOptimizer.get_value())
+        decoder.load_params(decOptimizer.get_value())
+
+        representation, encBackprop = encoder.sample.evaluate(inps)
+
+        picsLogprob, decBackprop = decoder.logprob.evaluate(
+            representation,
+            sample=inps
+        )
+
+        dklValue, dklBackprop = dkl.evaluate(inps)
+
+        decOptimizer.apply_gradient(
+            decBackprop(np.ones(len(inps)))
+        )
+
+        encOptimizer.apply_gradient(
+            dklBackprop(-np.ones(len(inps)))
+            + encBackprop(decoder_input.last_gradient)
+        )
+
+    def _generate(n):
+        decoder.load_params(decOptimizer.get_value())
+
+        lats = np.random.randn(n, LATENT_SIZE)
+        return decoder.sample(lats)
+
+    class X:
+        train = _train
+        generate = _generate
+    return X
+
+def split_obs(obs):
+    cutoff = len(obs)%50
+    obs = obs[cutoff:]
+    obs = obs.reshape(25, -1, 2).transpose((1,0,2))
+    toSub = np.zeros(obs.shape)
+    #toSub[:,1:,:] = obs[:,:-1,:]
+    obs = obs - toSub
+    return obs.reshape(-1, 2*25)
 
 def build_agent():
     model = Input(2)
@@ -78,6 +155,7 @@ def curiosity(world):
 
     agent = build_agent()
     classifier = build_classifier()
+    imagination = build_vae()
 
     rewNormalize = RunningNormalize(horizon=10)
     curNormalize = RunningNormalize(horizon=10)
@@ -86,14 +164,14 @@ def curiosity(world):
     for ep in range(2000):
         agent.randomize_policy()
         agent_traj = episode(world, agent.policy, max_steps=200)
-        generated_traj = Trajectory(
-                list(zip(
-                    np.random.randn(len(agent_traj)) * 0.9 - 0.3,
-                    np.random.randn(len(agent_traj)) * 0.07)),
-                [[1,0]]*len(agent_traj))
+        #generated_obs = [np.cumsum(go.reshape(-1, 2), axis=0) for go in imagination.generate(8)/100.]
+        generated_obs = [go.reshape(-1, 2) for go in imagination.generate(8)/100.]
+        generated_trajs = [Trajectory(go, [[1,0]]*25) for go in generated_obs]
+        agent_obs = split_obs(agent_traj.o)
+        imagination.train(agent_obs*100.)
 
         tagged_traj = Trajectory(agent_traj.o, [[0,1]]*len(agent_traj))
-        classifier_traj = Trajectory.joined(tagged_traj, generated_traj)
+        classifier_traj = Trajectory.joined(tagged_traj, *generated_trajs)
 
         classifier.sgd_step(classifier_traj, lr=0.001)
 
@@ -101,8 +179,8 @@ def curiosity(world):
                 rewards=lambda r: classifier.predict(agent_traj.o)[:,0]
         )
 
-        forplot += [tagged_traj]
-        if len(forplot) >= 10:
+        forplot += [tagged_traj, *generated_trajs]
+        if len(forplot) >= 100:
             save_plot(
                 log_dir + "/%04d.png" % (ep + 1),
                 classifier, forplot
