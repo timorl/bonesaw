@@ -44,7 +44,8 @@ def build_vae():
     decoder = Tanh(Affine(decoder_input, 128))
     decoder = Tanh(Affine(decoder, 128))
     decoder = Affine(decoder, 2*GEN_SEGM_LEN)
-    decoder = Gauss(mean=decoder, logstd=Const(np.zeros(2*GEN_SEGM_LEN) - 6))
+    mean_dec = decoder
+    decoder = Gauss(mean=decoder)
 
     encOptimizer = Adam(encoder.get_params(), horizon=10, lr=0.01)
     decOptimizer = Adam(decoder.get_params(), horizon=10, lr=0.01)
@@ -75,8 +76,8 @@ def build_vae():
     def _generate(n):
         decoder.load_params(decOptimizer.get_value())
 
-        lats = np.random.randn(n, LATENT_SIZE)
-        return decoder.sample(lats)
+        lats = np.random.randn(n, LATENT_SIZE)*2
+        return mean_dec(lats)
 
     class X:
         train = _train
@@ -86,10 +87,7 @@ def build_vae():
 def split_obs(obs):
     cutoff = len(obs)%(2*GEN_SEGM_LEN)
     obs = obs[cutoff:]
-    obs = obs.reshape(GEN_SEGM_LEN, -1, 2).transpose((1,0,2))
-    toSub = np.zeros(obs.shape)
-    #toSub[:,1:,:] = obs[:,:-1,:]
-    obs = obs - toSub
+    #obs = obs.reshape(GEN_SEGM_LEN, -1, 2).transpose((1,0,2))
     return obs.reshape(-1, 2*GEN_SEGM_LEN)
 
 def build_agent():
@@ -163,13 +161,16 @@ def curiosity(world):
     curNormalize = RunningNormalize(horizon=10)
 
     forplot = []
+    old_agent_trajs = []
     for ep in range(2000):
         agent.randomize_policy()
         agent_traj = episode(world, agent.policy, max_steps=200)
+        old_agent_trajs = old_agent_trajs[-50:]
+        old_agent_trajs.append(agent_traj)
         #generated_obs = [np.cumsum(go.reshape(-1, 2), axis=0) for go in imagination.generate(8)/100.]
         generated_obs = [go.reshape(-1, 2) for go in imagination.generate(200//GEN_SEGM_LEN)/100.]
         generated_trajs = [Trajectory(go, [[1,0]]*GEN_SEGM_LEN) for go in generated_obs]
-        agent_obs = split_obs(agent_traj.o)
+        agent_obs = split_obs(Trajectory.joined(old_agent_trajs).o) # glues beg of traj with end if GEN_SEGM_LEN is wrogn, FIXME
         imagination.train(agent_obs*100.)
 
         tagged_traj = Trajectory(agent_traj.o, [[0,1]]*len(agent_traj))
