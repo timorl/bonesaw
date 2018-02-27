@@ -15,6 +15,8 @@ from mannequin.gym import *
 from mannequin.backprop import autograd
 from mannequin.distrib import Gauss
 
+GEN_SEGM_LEN = 25
+
 def DKLUninormal(*, mean, logstd):
     @autograd
     def dkl(mean, logstd):
@@ -30,7 +32,7 @@ def DKLUninormal(*, mean, logstd):
 
 def build_vae():
     LATENT_SIZE=2
-    encoder = Input(2*25)
+    encoder = Input(2*GEN_SEGM_LEN)
     encoder = Tanh(Affine(encoder, 128))
     encoder = Tanh(Affine(encoder, 128))
     encoder = Affine(encoder, LATENT_SIZE), Params(LATENT_SIZE)
@@ -41,8 +43,8 @@ def build_vae():
     decoder_input = Input(LATENT_SIZE)
     decoder = Tanh(Affine(decoder_input, 128))
     decoder = Tanh(Affine(decoder, 128))
-    decoder = Affine(decoder, 2*25)
-    decoder = Gauss(mean=decoder, logstd=Const(np.zeros(50) - 6))
+    decoder = Affine(decoder, 2*GEN_SEGM_LEN)
+    decoder = Gauss(mean=decoder, logstd=Const(np.zeros(2*GEN_SEGM_LEN) - 6))
 
     encOptimizer = Adam(encoder.get_params(), horizon=10, lr=0.01)
     decOptimizer = Adam(decoder.get_params(), horizon=10, lr=0.01)
@@ -82,13 +84,13 @@ def build_vae():
     return X
 
 def split_obs(obs):
-    cutoff = len(obs)%50
+    cutoff = len(obs)%(2*GEN_SEGM_LEN)
     obs = obs[cutoff:]
-    obs = obs.reshape(25, -1, 2).transpose((1,0,2))
+    obs = obs.reshape(GEN_SEGM_LEN, -1, 2).transpose((1,0,2))
     toSub = np.zeros(obs.shape)
     #toSub[:,1:,:] = obs[:,:-1,:]
     obs = obs - toSub
-    return obs.reshape(-1, 2*25)
+    return obs.reshape(-1, 2*GEN_SEGM_LEN)
 
 def build_agent():
     model = Input(2)
@@ -165,8 +167,8 @@ def curiosity(world):
         agent.randomize_policy()
         agent_traj = episode(world, agent.policy, max_steps=200)
         #generated_obs = [np.cumsum(go.reshape(-1, 2), axis=0) for go in imagination.generate(8)/100.]
-        generated_obs = [go.reshape(-1, 2) for go in imagination.generate(8)/100.]
-        generated_trajs = [Trajectory(go, [[1,0]]*25) for go in generated_obs]
+        generated_obs = [go.reshape(-1, 2) for go in imagination.generate(200//GEN_SEGM_LEN)/100.]
+        generated_trajs = [Trajectory(go, [[1,0]]*GEN_SEGM_LEN) for go in generated_obs]
         agent_obs = split_obs(agent_traj.o)
         imagination.train(agent_obs*100.)
 
