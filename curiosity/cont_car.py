@@ -170,7 +170,7 @@ def curiosity(world):
         #generated_obs = [np.cumsum(go.reshape(-1, 2), axis=0) for go in imagination.generate(8)/100.]
         generated_obs = [go.reshape(-1, 2) for go in imagination.generate(200//GEN_SEGM_LEN)/100.]
         generated_trajs = [Trajectory(go, [[1,0]]*GEN_SEGM_LEN) for go in generated_obs]
-        agent_obs = split_obs(Trajectory.joined(old_agent_trajs).o) # glues beg of traj with end if GEN_SEGM_LEN is wrogn, FIXME
+        agent_obs = np.concatenate([split_obs(at.o) for at in old_agent_trajs], axis=0)
         imagination.train(agent_obs*100.)
 
         tagged_traj = Trajectory(agent_traj.o, [[0,1]]*len(agent_traj))
