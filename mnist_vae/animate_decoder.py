@@ -8,7 +8,7 @@ from matplotlib import pyplot as plt
 from matplotlib.widgets import Slider
 
 def run():
-    decoder_input = Input(5)
+    decoder_input = Input(2)
     decoder = Tanh(Affine(decoder_input, 300))
     decoder = Affine(decoder, 28*28)
     decoder.load_params(np.load(sys.argv[1]))
@@ -19,10 +19,10 @@ def run():
     fig, ax = plt.subplots()
     plt.subplots_adjust(bottom=0.35)
 
-    img = ax.imshow(get_img(np.zeros(decoder_input.n_outputs)), cmap="gray", vmin=0, vmax=1)
+    img = ax.imshow(get_img(np.zeros(decoder_input.n_outputs)), cmap="gray", vmin=-1, vmax=1)
 
     slider_ax = [plt.axes([0.05, 0.05 * (i+1), 0.9, 0.03]) for i in range(decoder_input.n_outputs)]
-    sliders = [Slider(a, '', -2.0, 2.0, valinit=0.0) for a in slider_ax]
+    sliders = [Slider(a, '', -3.0, 3.0, valinit=0.0) for a in slider_ax]
 
     def update(val):
         x = [s.val for s in sliders]

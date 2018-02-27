@@ -28,16 +28,18 @@ def DKLUninormal(*, mean, logstd):
     return Function(mean, logstd, f=dkl, shape=())
 
 def run():
+    LATENT_SIZE = 2
+
     train_x = np.load("__mnist.npz")['train_x']
 
     encoder = Input(28*28)
     encoder = Tanh(Affine(encoder, 300))
-    encoder = Affine(encoder, 5), Params(5)
+    encoder = Affine(encoder, LATENT_SIZE), Params(LATENT_SIZE)
 
     dkl = DKLUninormal(mean=encoder[0], logstd=encoder[1])
     encoder = Gauss(mean=encoder[0], logstd=encoder[1])
 
-    decoder_input = Input(5)
+    decoder_input = Input(LATENT_SIZE)
     decoder = Tanh(Affine(decoder_input, 300))
     decoder = Affine(decoder, 28*28)
     decoder = Gauss(mean=decoder, logstd=Const(np.zeros(28*28) - 3))
@@ -78,9 +80,9 @@ def run():
             fig, plots = plt.subplots(2)
             changedPic = decoder.sample(representation[43])
             plots[0].imshow(changedPic.reshape(28,28),
-                cmap="gray", vmin=0, vmax=1)
+                cmap="gray", vmin=-1, vmax=1)
             plots[1].imshow(pics[43].reshape(28,28),
-                cmap="gray", vmin=0, vmax=1)
+                cmap="gray", vmin=-1, vmax=1)
             fig.savefig("step_%05d.png"%(i+1), dpi=100)
 
         if i % 1000 == 999:
