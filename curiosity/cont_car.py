@@ -30,6 +30,53 @@ def DKLUninormal(*, mean, logstd):
 
     return Function(mean, logstd, f=dkl, shape=())
 
+def Split(inner):
+    secondEvaluate = None
+    class First(Layer):
+        def __init__(self):
+
+            def evaluate(inps):
+                nonlocal secondEvaluate
+                firstResult = None
+                firstBackprop = None
+                firstGrad = None
+                def backprop(grad, output=None):
+                    nonlocal firstGrad
+                    assert(firstGrad is None)
+                    firstGrad = grad
+                    return []
+
+                firstResult, firstBackprop = inner.evaluate(inps)
+                def newEvaluate(inps):
+                    nonlocal firstResult
+                    def newBackprop(grad, output=None):
+                        nonlocal firstGrad, firstBackprop
+                        firstGrad += grad
+                        result = firstBackprop(firstGrad, output=output)
+                        firstBackprop = None
+                        firstGrad = None
+                        return result
+                    res = firstResult
+                    firstResult = None
+                    return res, newBackprop
+                assert(secondEvaluate is None)
+                secondEvaluate = newEvaluate
+                return firstResult, backprop
+
+            super().__init__(evaluate=evaluate, shape=inner.shape, n_params=0)
+    class Second(Layer):
+        def __init__(self):
+
+            def evaluate(inps):
+                nonlocal secondEvaluate
+                eva = secondEvaluate
+                secondEvaluate = None
+                return eva(inps)
+
+            super().__init__(evaluate=evaluate, shape=inner.shape, n_params=inner.n_params, get_params=inner.get_params, load_params=inner.load_params)
+
+    return First(), Second()
+
 def build_hidden(layer):
     for _ in range(2):
         layer = Tanh(Affine(layer, 128))
@@ -38,16 +85,17 @@ def build_hidden(layer):
 def build_vae():
     LATENT_SIZE=2
     encoder = build_hidden(Input(2*GEN_SEGM_LEN))
-    encoder = Affine(encoder, LATENT_SIZE), Params(LATENT_SIZE)
+    encoder = Split(encoder)
+    encoder = Affine(encoder[0], LATENT_SIZE), Affine(encoder[1], LATENT_SIZE)
 
     dkl = DKLUninormal(mean=encoder[0], logstd=encoder[1])
     encoder = Gauss(mean=encoder[0], logstd=encoder[1])
 
     decoder_input = Input(LATENT_SIZE)
     decoder = build_hidden(decoder_input)
-    decoder = Affine(decoder, 2*GEN_SEGM_LEN)
-    mean_dec = decoder
-    decoder = Gauss(mean=decoder)
+    decoder = Split(decoder)
+    decoder_params = Affine(decoder[0], 2*GEN_SEGM_LEN), Affine(decoder[1], 2*GEN_SEGM_LEN)
+    decoder = Gauss(mean=decoder_params[0], logstd=decoder_params[1])
 
     encOptimizer = Adam(encoder.get_params(), horizon=10, lr=0.01)
     decOptimizer = Adam(decoder.get_params(), horizon=10, lr=0.01)
@@ -80,7 +128,9 @@ def build_vae():
             decoder.load_params(decOptimizer.get_value())
 
             lats = np.random.randn(n, LATENT_SIZE)*2
-            return mean_dec(lats)
+            result, _ = decoder_params[0](lats), decoder_params[1](lats)
+
+            return result
 
     return Result
 
