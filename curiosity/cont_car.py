@@ -125,26 +125,19 @@ def build_classifier():
     model = SimplePredictor(2, 2, classifier=True, normalize_inputs=True)
     return model
 
-def save_plot(file_name, classifier, trajs, *,
+def save_plot(file_name, trajs, *,
         xs=lambda t: t.o[:,0],
         ys=lambda t: t.o[:,1],
         color=lambda t: ["b", "r"][np.argmax(t.a[0])]):
     import matplotlib.pyplot as plt
-    coords = (np.mgrid[0:11,0:11].reshape(2,-1).T
-        * [0.175, 0.015] - [1.25, 0.075])
     plt.clf()
     for t in trajs:
         plt.plot(
             xs(t), ys(t),
             color=color(t), alpha=0.2, linewidth=2, zorder=1
         )
-    plt.imshow(
-        classifier.predict(coords)[:,1].reshape(11, 11).T[::-1,:],
-        zorder=0, aspect="auto", vmin=0.0, vmax=1.0,
-        cmap="gray", interpolation="bicubic",
-        extent=[np.min(coords[:,0]), np.max(coords[:,0]),
-            np.min(coords[:,1]), np.max(coords[:,1])]
-    )
+    plt.gcf().axes[0].set_ylim([-0.075, 0.075])
+    plt.gcf().axes[0].set_xlim([-1.25, 0.5])
     plt.gcf().set_size_inches(10, 8)
     plt.gcf().savefig(file_name, dpi=100)
 
@@ -154,14 +147,14 @@ def traj_scorer():
     old_agent_trajs = []
     forplot = []
     def imagine():
-        generated_obs = [go.reshape(-1, 2) for go in imagination.generate(200//GEN_SEGM_LEN)/100.]
+        generated_obs = [go.reshape(-1, 2) for go in imagination.generate(200//GEN_SEGM_LEN)]
         return [Trajectory(go, [[1,0]]*GEN_SEGM_LEN) for go in generated_obs]
     def frolic(agent_traj):
         nonlocal old_agent_trajs
         old_agent_trajs = old_agent_trajs[-128:]
         old_agent_trajs.append(agent_traj)
         agent_obs = np.concatenate([split_obs(at.o) for at in old_agent_trajs[-50:]], axis=0)
-        imagination.train(agent_obs*100.)
+        imagination.train(agent_obs)
     def ponder(agent_traj, generated_trajs):
         nonlocal forplot
         tagged_traj = Trajectory(agent_traj.o, [[0,1]]*len(agent_traj))
@@ -177,9 +170,10 @@ def traj_scorer():
             return agent_traj.modified(
                     rewards=lambda r: classifier.predict(agent_traj.o)[:,0]
             )
-        def plot(file_name):
+        def plot(file_name, transform=lambda x: x):
             nonlocal forplot
-            save_plot(file_name, classifier, forplot)
+            forplot = [fp.modified(observations=transform) for fp in forplot]
+            save_plot(file_name, forplot)
             forplot = []
     return Result
 
@@ -188,10 +182,14 @@ def curiosity(world):
     if not os.path.exists(log_dir):
         os.mkdir(log_dir)
 
+    world = NormalizedObservations(world)
     agent = build_agent()
     scorer = traj_scorer()
 
     curNormalize = RunningNormalize(horizon=10)
+
+    def unnormalize(obs):
+        return (obs * world.get_std()) + world.get_mean()
 
     for ep in range(2000):
         agent.randomize_policy()
@@ -200,7 +198,7 @@ def curiosity(world):
         agent_traj_curio = scorer.score(agent_traj)
 
         if (ep % 20) == 0:
-            scorer.plot(log_dir + "/%04d.png"%ep)
+            scorer.plot(log_dir + "/%04d.png"%ep, unnormalize)
 
         print(bar(np.mean(agent_traj_curio.r), 1.0))
 
