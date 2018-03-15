@@ -150,11 +150,6 @@ def build_agent():
     model = LReLU(Affine(model, 32))
     model = LReLU(Affine(model, 32))
     model = Affine(model, 1)
-    normalize= RunningNormalize(shape=(2,))
-    def policy(obs):
-        obs = normalize.apply(obs)
-        actions, _ = model.evaluate(obs)
-        return actions
 
     opt = Adam(
         np.random.randn(model.n_params),
@@ -162,7 +157,6 @@ def build_agent():
         horizon=20, # 40 / 10 / 20 / 5
     )
     def sgd_step(traj):
-        traj = traj.modified(observations=normalize)
         model.load_params(opt.get_value())
         quiet_actions, backprop = model.evaluate(traj.o)
         grad = ((traj.a - quiet_actions).T * traj.r.T).T
@@ -172,7 +166,7 @@ def build_agent():
         model.load_params(opt.get_value()+((np.random.randn(model.n_params)*0.2)))
 
     model.randomize_policy = randomize_policy
-    model.policy = policy
+    model.policy = model
     model.sgd_step = sgd_step
     return model
 
@@ -252,6 +246,7 @@ def curiosity(world):
 
         if (ep % 20) == 0:
             scorer.plot(log_dir + "/%04d.png"%ep, unnormalize)
+            np.savez(log_dir + "/%04d.npz"%ep, params=agent.get_params(), norm_mean=world.get_mean(), norm_std=world.get_std())
 
         print(bar(np.mean(agent_traj_curio.r), 100.))
 
@@ -263,10 +258,21 @@ def run():
     world = gym.make("MountainCarContinuous-v0")
 
     if len(sys.argv) >= 2:
+        old_render = world.render
+        def betterRender():
+            import time
+            old_render()
+            time.sleep(0.01)
+        world.render = betterRender
         agent = build_agent()
         for fn in sys.argv[1:]:
-            agent.load_params(np.load(fn))
-            world.render(agent)
+            pars = np.load(fn)
+            agent.load_params(pars["params"])
+            def seeingAgent(inps):
+                inps = inps - pars["norm_mean"]
+                inps = inps / pars["norm_std"]
+                return agent(inps)
+            episode(world, seeingAgent, render=True)
     else:
         curiosity(world)
 
