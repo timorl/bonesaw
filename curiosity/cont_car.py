@@ -196,14 +196,16 @@ def traj_scorer():
     classifier = build_classifier()
     old_agent_trajs = []
     forplot = []
+    def pick_segment(obs):
+        start = np.random.randint(len(obs) - GEN_SEGM_LEN + 1)
+        return obs[start:start+GEN_SEGM_LEN,:].reshape(2*GEN_SEGM_LEN)
     def imagine():
         generated_obs = [go.reshape(-1, 2) for go in imagination.generate(200//GEN_SEGM_LEN)]
         return [Trajectory(go, [[1,0]]*GEN_SEGM_LEN) for go in generated_obs]
-    def frolic(agent_traj):
+    def frolic():
         nonlocal old_agent_trajs
         old_agent_trajs = old_agent_trajs[-128:]
-        old_agent_trajs.append(agent_traj)
-        agent_obs = np.concatenate([split_obs(at.o) for at in old_agent_trajs[-50:]], axis=0)
+        agent_obs = np.array([pick_segment(at.o) for at in old_agent_trajs])
         imagination.train(agent_obs)
     def ponder(agent_traj, generated_trajs):
         nonlocal forplot
@@ -214,8 +216,10 @@ def traj_scorer():
         forplot += [tagged_traj, *generated_trajs]
     class Result:
         def score(agent_traj):
+            old_agent_trajs.append(agent_traj)
             generated_trajs = imagine()
-            frolic(agent_traj)
+            for _ in range(4):
+                frolic()
             ponder(agent_traj, generated_trajs)
             return agent_traj.modified(
                     rewards=lambda r: classifier.predict(agent_traj.o)[:,0]
