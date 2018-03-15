@@ -30,19 +30,21 @@ def DKLUninormal(*, mean, logstd):
 
     return Function(mean, logstd, f=dkl, shape=())
 
+def build_hidden(layer):
+    for _ in range(2):
+        layer = Tanh(Affine(layer, 128))
+    return layer
+
 def build_vae():
     LATENT_SIZE=2
-    encoder = Input(2*GEN_SEGM_LEN)
-    encoder = Tanh(Affine(encoder, 128))
-    encoder = Tanh(Affine(encoder, 128))
+    encoder = build_hidden(Input(2*GEN_SEGM_LEN))
     encoder = Affine(encoder, LATENT_SIZE), Params(LATENT_SIZE)
 
     dkl = DKLUninormal(mean=encoder[0], logstd=encoder[1])
     encoder = Gauss(mean=encoder[0], logstd=encoder[1])
 
     decoder_input = Input(LATENT_SIZE)
-    decoder = Tanh(Affine(decoder_input, 128))
-    decoder = Tanh(Affine(decoder, 128))
+    decoder = build_hidden(decoder_input)
     decoder = Affine(decoder, 2*GEN_SEGM_LEN)
     mean_dec = decoder
     decoder = Gauss(mean=decoder)
@@ -50,39 +52,37 @@ def build_vae():
     encOptimizer = Adam(encoder.get_params(), horizon=10, lr=0.01)
     decOptimizer = Adam(decoder.get_params(), horizon=10, lr=0.01)
 
-    def _train(inps):
-        assert(len(inps.shape) == 2)
-        encoder.load_params(encOptimizer.get_value())
-        decoder.load_params(decOptimizer.get_value())
+    class Result:
+        def train(inps):
+            assert(len(inps.shape) == 2)
+            encoder.load_params(encOptimizer.get_value())
+            decoder.load_params(decOptimizer.get_value())
 
-        representation, encBackprop = encoder.sample.evaluate(inps)
+            representation, encBackprop = encoder.sample.evaluate(inps)
 
-        picsLogprob, decBackprop = decoder.logprob.evaluate(
-            representation,
-            sample=inps
-        )
+            picsLogprob, decBackprop = decoder.logprob.evaluate(
+                representation,
+                sample=inps
+            )
 
-        dklValue, dklBackprop = dkl.evaluate(inps)
+            dklValue, dklBackprop = dkl.evaluate(inps)
 
-        decOptimizer.apply_gradient(
-            decBackprop(np.ones(len(inps)))
-        )
+            decOptimizer.apply_gradient(
+                decBackprop(np.ones(len(inps)))
+            )
 
-        encOptimizer.apply_gradient(
-            dklBackprop(-np.ones(len(inps)))
-            + encBackprop(decoder_input.last_gradient)
-        )
+            encOptimizer.apply_gradient(
+                dklBackprop(-np.ones(len(inps)))
+                + encBackprop(decoder_input.last_gradient)
+            )
 
-    def _generate(n):
-        decoder.load_params(decOptimizer.get_value())
+        def generate(n):
+            decoder.load_params(decOptimizer.get_value())
 
-        lats = np.random.randn(n, LATENT_SIZE)*2
-        return mean_dec(lats)
+            lats = np.random.randn(n, LATENT_SIZE)*2
+            return mean_dec(lats)
 
-    class X:
-        train = _train
-        generate = _generate
-    return X
+    return Result
 
 def split_obs(obs):
     cutoff = len(obs)%(2*GEN_SEGM_LEN)
@@ -148,62 +148,65 @@ def save_plot(file_name, classifier, trajs, *,
     plt.gcf().set_size_inches(10, 8)
     plt.gcf().savefig(file_name, dpi=100)
 
+def traj_scorer():
+    imagination = build_vae()
+    classifier = build_classifier()
+    old_agent_trajs = []
+    forplot = []
+    def imagine():
+        generated_obs = [go.reshape(-1, 2) for go in imagination.generate(200//GEN_SEGM_LEN)/100.]
+        return [Trajectory(go, [[1,0]]*GEN_SEGM_LEN) for go in generated_obs]
+    def frolic(agent_traj):
+        nonlocal old_agent_trajs
+        old_agent_trajs = old_agent_trajs[-128:]
+        old_agent_trajs.append(agent_traj)
+        agent_obs = np.concatenate([split_obs(at.o) for at in old_agent_trajs[-50:]], axis=0)
+        imagination.train(agent_obs*100.)
+    def ponder(agent_traj, generated_trajs):
+        nonlocal forplot
+        tagged_traj = Trajectory(agent_traj.o, [[0,1]]*len(agent_traj))
+        classifier_traj = Trajectory.joined(tagged_traj, *generated_trajs)
+        classifier.sgd_step(classifier_traj, lr=0.001)
+
+        forplot += [tagged_traj, *generated_trajs]
+    class Result:
+        def score(agent_traj):
+            generated_trajs = imagine()
+            frolic(agent_traj)
+            ponder(agent_traj, generated_trajs)
+            return agent_traj.modified(
+                    rewards=lambda r: classifier.predict(agent_traj.o)[:,0]
+            )
+        def plot(file_name):
+            nonlocal forplot
+            save_plot(file_name, classifier, forplot)
+            forplot = []
+    return Result
+
 def curiosity(world):
     log_dir = "__car"
     if not os.path.exists(log_dir):
         os.mkdir(log_dir)
 
     agent = build_agent()
-    classifier = build_classifier()
-    imagination = build_vae()
+    scorer = traj_scorer()
 
-    rewNormalize = RunningNormalize(horizon=10)
     curNormalize = RunningNormalize(horizon=10)
 
-    forplot = []
-    old_agent_trajs = []
     for ep in range(2000):
         agent.randomize_policy()
         agent_traj = episode(world, agent.policy, max_steps=200)
-        old_agent_trajs = old_agent_trajs[-50:]
-        old_agent_trajs.append(agent_traj)
-        #generated_obs = [np.cumsum(go.reshape(-1, 2), axis=0) for go in imagination.generate(8)/100.]
-        generated_obs = [go.reshape(-1, 2) for go in imagination.generate(200//GEN_SEGM_LEN)/100.]
-        generated_trajs = [Trajectory(go, [[1,0]]*GEN_SEGM_LEN) for go in generated_obs]
-        agent_obs = np.concatenate([split_obs(at.o) for at in old_agent_trajs], axis=0)
-        imagination.train(agent_obs*100.)
 
-        tagged_traj = Trajectory(agent_traj.o, [[0,1]]*len(agent_traj))
-        classifier_traj = Trajectory.joined(tagged_traj, *generated_trajs)
+        agent_traj_curio = scorer.score(agent_traj)
 
-        classifier.sgd_step(classifier_traj, lr=0.001)
-
-        agent_traj_curio = agent_traj.modified(
-                rewards=lambda r: classifier.predict(agent_traj.o)[:,0]
-        )
-
-        forplot += [tagged_traj, *generated_trajs]
-        if len(forplot) >= 100:
-            save_plot(
-                log_dir + "/%04d.png" % (ep + 1),
-                classifier, forplot
-            )
-            forplot = []
+        if (ep % 20) == 0:
+            scorer.plot(log_dir + "/%04d.png"%ep)
 
         print(bar(np.mean(agent_traj_curio.r), 1.0))
-        print(bar(np.sum(agent_traj.r), 200.))
 
         agent_traj_curio = agent_traj_curio.discounted(horizon=200)
         agent_traj_curio = agent_traj_curio.modified(rewards=curNormalize)
-        agent_traj = agent_traj.discounted(horizon=200)
-        agent_traj = agent_traj.modified(rewards=rewNormalize)
-        agent_traj = agent_traj.modified(rewards=np.tanh)
-        real_weight=0.5
-        curio_weight=0.5
-        agent_traj = agent_traj.modified(
-                rewards=lambda r: (real_weight*r + curio_weight*agent_traj_curio.r)
-        )
-        agent.sgd_step(agent_traj)
+        agent.sgd_step(agent_traj_curio)
 
 def run():
     world = gym.make("MountainCarContinuous-v0")
