@@ -183,13 +183,17 @@ def save_plot(file_name, trajs, *,
 def traj_scorer():
     imagination = build_vae()
     old_agent_trajs = []
+    def get_segment_at(obs, start):
+        return obs[start:start+GEN_SEGM_LEN,:].reshape(2*GEN_SEGM_LEN)
     def split_into_segments(obs):
-        cutoff = len(obs)%(GEN_SEGM_LEN)
-        obs = obs[cutoff:]
-        return obs.reshape(-1, 2*GEN_SEGM_LEN)
+        assert(len(obs) >= GEN_SEGM_LEN)
+        result = []
+        for start in range(len(obs) - GEN_SEGM_LEN + 1):
+            result.append(get_segment_at(obs, start))
+        return np.array(result)
     def pick_segment(obs):
         start = np.random.randint(len(obs) - GEN_SEGM_LEN + 1)
-        return obs[start:start+GEN_SEGM_LEN,:].reshape(2*GEN_SEGM_LEN)
+        return get_segment_at(obs, start)
     def imagine(how_many):
         generated_obs = [go.reshape(-1, 2) for go in imagination.generate(how_many)]
         return [Trajectory(go, [[1,0]]*GEN_SEGM_LEN) for go in generated_obs]
@@ -202,16 +206,16 @@ def traj_scorer():
         obs = split_into_segments(obs)
         rewards = imagination.DKL(obs)
         def c(r):
-            result = []
-            for i in range(len(r)):
-                result.append(rewards[min(i//GEN_SEGM_LEN, len(rewards)-1)])
+            result = [0 for _ in range(GEN_SEGM_LEN)]
+            for i in range(len(r) - GEN_SEGM_LEN):
+                result.append(rewards[i])
             return result
         return c
 
     class Result:
         def score(agent_traj):
             old_agent_trajs.append(agent_traj)
-            for _ in range(4):
+            for _ in range(16):
                 frolic()
             return agent_traj.modified(rewards=curious(agent_traj.o))
         def plot(file_name, transform=lambda x: x):
