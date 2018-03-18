@@ -83,7 +83,7 @@ def build_vae():
             layer = Tanh(Affine(layer, 128))
         return layer
 
-    LATENT_SIZE=2
+    LATENT_SIZE=3
     encoder = build_hidden(Input(2*GEN_SEGM_LEN))
     encoder = Split(encoder)
     encoder = Affine(encoder[0], LATENT_SIZE), Affine(encoder[1], LATENT_SIZE)
@@ -145,28 +145,25 @@ def build_vae():
     return Result
 
 def build_agent():
+    import autograd.numpy as autonum
     model = Input(2)
     model = LReLU(Affine(model, 32))
     model = LReLU(Affine(model, 32))
-    model = Affine(model, 1)
+    model = Function(Const([2.0]), Tanh(Affine(model, 1)), f=autograd(autonum.multiply))
+    model = Gauss(mean=model)
 
     opt = Adam(
         np.random.randn(model.n_params),
         lr=0.01,
         horizon=20,
     )
-    def sgd_step(traj):
+    def train_step(traj):
         model.load_params(opt.get_value())
-        quiet_actions, backprop = model.evaluate(traj.o)
-        grad = ((traj.a - quiet_actions).T * traj.r.T).T
-        opt.apply_gradient(backprop(grad))
+        _, backprop = model.logprob.evaluate(traj.o, sample=traj.a)
+        opt.apply_gradient(backprop(traj.r))
 
-    def randomize_policy():
-        model.load_params(opt.get_value()+((np.random.randn(model.n_params)*0.2)))
-
-    model.randomize_policy = randomize_policy
-    model.policy = model
-    model.sgd_step = sgd_step
+    model.policy = model.sample
+    model.train_step = train_step
     return model
 
 def save_plot(file_name, trajs, *,
@@ -235,7 +232,6 @@ def trainer(agent, world, scorer):
     rewardNormalize = RunningNormalize(horizon=10)
 
     def train():
-        agent.randomize_policy()
         agent_traj = episode(world, agent.policy, max_steps=200)
 
         agent_traj_curio = scorer.score(agent_traj)
@@ -244,7 +240,7 @@ def trainer(agent, world, scorer):
 
         agent_traj_curio = agent_traj_curio.discounted(horizon=200)
         agent_traj_curio = agent_traj_curio.modified(rewards=rewardNormalize)
-        agent.sgd_step(agent_traj_curio)
+        agent.train_step(agent_traj_curio)
 
     return train
 
@@ -282,7 +278,7 @@ def render(world, agent_files):
         def seeingAgent(inps):
             inps = inps - pars["norm_mean"]
             inps = inps / pars["norm_std"]
-            return agent(inps)
+            return agent.sample(inps)
         episode(world, seeingAgent, render=True)
 
 def run():
