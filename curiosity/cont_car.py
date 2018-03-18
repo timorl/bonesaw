@@ -137,6 +137,11 @@ def build_vae():
             encoder.load_params(encOptimizer.get_value())
             return dkl(inps)
 
+        def logprob(inps):
+            encoder.load_params(encOptimizer.get_value())
+            decoder.load_params(decOptimizer.get_value())
+            return decoder.logprob(encoder.sample(inps), sample=inps)
+
     return Result
 
 def build_agent():
@@ -204,7 +209,7 @@ def traj_scorer():
         imagination.train(agent_obs)
     def curious(obs):
         obs = split_into_segments(obs)
-        rewards = imagination.DKL(obs)
+        rewards = -imagination.logprob(obs)
         def c(r):
             result = [0 for _ in range(GEN_SEGM_LEN)]
             for i in range(len(r) - GEN_SEGM_LEN):
