@@ -184,7 +184,7 @@ def traj_scorer():
     imagination = build_vae()
     old_agent_trajs = []
     def split_into_segments(obs):
-        cutoff = len(obs)%(2*GEN_SEGM_LEN)
+        cutoff = len(obs)%(GEN_SEGM_LEN)
         obs = obs[cutoff:]
         return obs.reshape(-1, 2*GEN_SEGM_LEN)
     def pick_segment(obs):
