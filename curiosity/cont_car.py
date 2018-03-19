@@ -15,7 +15,9 @@ from mannequin.gym import *
 from mannequin.backprop import autograd
 from mannequin.distrib import Gauss
 
-GEN_SEGM_LEN = 25
+GEN_SEGM_LEN = 50
+TRAJ_LEN = 200
+GEN_SEGM_DIFF = TRAJ_LEN//GEN_SEGM_LEN
 
 def DKLUninormal(*, mean, logstd):
     @autograd
@@ -186,15 +188,21 @@ def traj_scorer():
     imagination = build_vae()
     old_agent_trajs = []
     def get_segment_at(obs, start):
-        return obs[start:start+GEN_SEGM_LEN,:].reshape(2*GEN_SEGM_LEN)
+        return obs[start::GEN_SEGM_DIFF,:].reshape(2*GEN_SEGM_LEN)
+    def fill_obs(obs):
+        result = [o for o in obs]
+        for _ in range(TRAJ_LEN - len(obs)):
+            result.append(obs[-1])
+        return np.array(result)
     def split_into_segments(obs):
-        assert(len(obs) >= GEN_SEGM_LEN)
+        obs = fill_obs(obs)
         result = []
-        for start in range(len(obs) - GEN_SEGM_LEN + 1):
+        for start in range(GEN_SEGM_DIFF):
             result.append(get_segment_at(obs, start))
         return np.array(result)
     def pick_segment(obs):
-        start = np.random.randint(len(obs) - GEN_SEGM_LEN + 1)
+        obs = fill_obs(obs)
+        start = np.random.randint(GEN_SEGM_DIFF)
         return get_segment_at(obs, start)
     def imagine(how_many):
         generated_obs = [go.reshape(-1, 2) for go in imagination.generate(how_many)]
@@ -207,11 +215,9 @@ def traj_scorer():
     def curious(obs):
         obs = split_into_segments(obs)
         rewards = -imagination.logprob(obs)
-        mean_reward = np.mean(rewards)
+        max_reward = np.max(rewards)
         def c(r):
-            result = [mean_reward for _ in range(GEN_SEGM_LEN)]
-            for i in range(len(r) - GEN_SEGM_LEN):
-                result.append(rewards[i])
+            result = [max_reward for _ in range(len(r))]
             return result
         return c
 
@@ -219,7 +225,7 @@ def traj_scorer():
         def score(agent_traj, train):
             old_agent_trajs.append(agent_traj)
             if train:
-                for _ in range(16):
+                for _ in range(4):
                     frolic()
             return agent_traj.modified(rewards=curious(agent_traj.o))
         def plot(file_name, transform=lambda x: x):
@@ -237,7 +243,7 @@ def trainer(agent, world, scorer):
 
     def train():
         nonlocal train_imagination, satisfaction
-        agent_traj = episode(world, agent.policy, max_steps=200)
+        agent_traj = episode(world, agent.policy, max_steps=TRAJ_LEN)
 
         agent_traj_curio = scorer.score(agent_traj, train_imagination)
 
