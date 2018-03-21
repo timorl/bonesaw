@@ -206,7 +206,7 @@ def traj_scorer():
         imagination.train(agent_obs)
     def curious(obs):
         obs = split_into_segments(obs)
-        rewards = -imagination.logprob(obs)
+        rewards = imagination.DKL(obs)-imagination.logprob(obs)
         mean_reward = np.mean(rewards)
         def c(r):
             result = [mean_reward for _ in range(GEN_SEGM_LEN)]
