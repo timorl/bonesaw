@@ -38,6 +38,8 @@ def build_vae():
         return layer
 
     LATENT_SIZE=3
+    normalize = RunningNormalize(shape=(2*GEN_SEGM_LEN,), horizon=50)
+
     encoder = build_hidden(Input(2*GEN_SEGM_LEN))
 
     encoder = Gauss(mean=Affine(encoder, LATENT_SIZE), logstd=Affine(encoder, LATENT_SIZE))
@@ -53,6 +55,7 @@ def build_vae():
     class Result:
         def train(inps):
             assert(len(inps.shape) == 2)
+            inps = normalize(inps)
             encoder.load_params(encOptimizer.get_value())
             decoder.load_params(decOptimizer.get_value())
 
@@ -78,17 +81,13 @@ def build_vae():
             decoder.load_params(decOptimizer.get_value())
 
             lats = np.random.randn(n, LATENT_SIZE)
-            return decoder.mean(lats)
+            return decoder.mean(lats)*normalize.get_std() + normalize.get_mean()
 
         def DKL(inps):
             assert(len(inps.shape) == 2)
+            inps = normalize.apply(inps)
             encoder.load_params(encOptimizer.get_value())
             return dkl(inps)
-
-        def logprob(inps):
-            encoder.load_params(encOptimizer.get_value())
-            decoder.load_params(decOptimizer.get_value())
-            return decoder.logprob(encoder.sample(inps), sample=inps)
 
     return Result
 
@@ -97,18 +96,19 @@ def build_agent():
     model = Tanh(Affine(model, 64))
     model = Tanh(Affine(model, 64))
     model = Gauss(mean=Affine(model, 1))
+    normalize = RunningNormalize(shape=(2,))
 
     opt = Adam(
         np.random.randn(model.n_params),
-        lr=0.01,
+        lr=0.005,
         horizon=10,
     )
     def train_step(traj):
         model.load_params(opt.get_value())
-        _, backprop = model.logprob.evaluate(traj.o, sample=traj.a)
+        _, backprop = model.logprob.evaluate(normalize.apply(traj.o), sample=traj.a)
         opt.apply_gradient(backprop(traj.r))
 
-    model.policy = model.sample
+    model.policy = lambda o: model.sample(normalize(o))
     model.train_step = train_step
     return model
 
@@ -147,7 +147,7 @@ def traj_scorer():
         return [Trajectory(go, [[1,0]]*GEN_SEGM_LEN) for go in generated_obs]
     def frolic():
         nonlocal old_agent_trajs
-        old_agent_trajs = old_agent_trajs[-512:]
+        old_agent_trajs = old_agent_trajs[-128:]
         agent_obs = np.array([pick_segment(at.o) for at in old_agent_trajs])
         imagination.train(agent_obs)
     def curious(obs):
@@ -193,20 +193,19 @@ def curiosity(world):
     if not os.path.exists(log_dir):
         os.mkdir(log_dir)
 
-    world = NormalizedObservations(world)
     agent = build_agent()
     scorer = traj_scorer()
     train = trainer(agent, world, scorer)
 
     def unnormalize(obs):
-        return (obs * world.get_std()) + world.get_mean()
+        return obs
 
     for ep in range(2000):
         train(ep>300)
 
         if (ep % 20) == 0:
             scorer.plot(log_dir + "/%04d.png"%ep, unnormalize)
-            np.savez(log_dir + "/%04d.npz"%ep, params=agent.get_params(), norm_mean=world.get_mean(), norm_std=world.get_std())
+            np.savez(log_dir + "/%04d.npz"%ep, params=agent.get_params())
 
 
 def render(world, agent_files):
@@ -220,11 +219,8 @@ def render(world, agent_files):
     for fn in agent_files:
         pars = np.load(fn)
         agent.load_params(pars["params"])
-        def seeingAgent(inps):
-            inps = inps - pars["norm_mean"]
-            inps = inps / pars["norm_std"]
-            return agent.sample(inps)
-        episode(world, seeingAgent, render=True)
+        #doesn't work, needs normalize params
+        episode(world, agent.policy, render=True)
 
 def run():
     world = gym.make("MountainCarContinuous-v0")
