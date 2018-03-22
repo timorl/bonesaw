@@ -180,16 +180,17 @@ def traj_scorer():
 def trainer(agent, world, scorer):
     rewardNormalize = RunningNormalize(horizon=10)
 
-    def train():
+    def train(trainAgent=True):
         agent_traj = episode(world, agent.policy, max_steps=TRAJ_LEN)
 
         agent_traj_curio = scorer.score(agent_traj)
 
         print(bar(np.mean(agent_traj_curio.r), 200.))
 
-        agent_traj_curio = agent_traj_curio.discounted(horizon=200)
-        agent_traj_curio = agent_traj_curio.modified(rewards=rewardNormalize)
-        agent.train_step(agent_traj_curio)
+        if trainAgent:
+            agent_traj_curio = agent_traj_curio.discounted(horizon=200)
+            agent_traj_curio = agent_traj_curio.modified(rewards=rewardNormalize)
+            agent.train_step(agent_traj_curio)
 
     return train
 
@@ -203,11 +204,12 @@ def curiosity(world):
     scorer = traj_scorer()
     train = trainer(agent, world, scorer)
 
-    for ep in range(2000):
-        train()
+    def unnormalize(obs):
+        return (obs * world.get_std()) + world.get_mean()
 
-        def unnormalize(obs):
-            return (obs * world.get_std()) + world.get_mean()
+    for ep in range(2000):
+        train(ep>50)
+
         if (ep % 20) == 0:
             scorer.plot(log_dir + "/%04d.png"%ep, unnormalize)
             np.savez(log_dir + "/%04d.npz"%ep, params=agent.get_params(), norm_mean=world.get_mean(), norm_std=world.get_std())
