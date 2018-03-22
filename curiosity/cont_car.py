@@ -13,7 +13,7 @@ from mannequin import *
 from mannequin.basicnet import *
 from mannequin.gym import *
 from mannequin.backprop import autograd
-from mannequin.distrib import Gauss
+from mannequin.distrib import Gauss, Discrete
 
 def DKLUninormal(*, mean, logstd):
     @autograd
@@ -86,12 +86,22 @@ def build_vae(*shape):
 
     return Result
 
-def build_agent():
-    model = Input(2)
+def build_agent(env):
+    inp_shape = env.observation_space.low.shape
+    model = Input(*inp_shape)
     model = Tanh(Affine(model, 64))
     model = Tanh(Affine(model, 64))
-    model = Gauss(mean=Affine(model, 1))
-    normalize = RunningNormalize(shape=(2,))
+    if isinstance(env.action_space, gym.spaces.Box):
+        action_size = env.action_space.low.size
+        Distribution = lambda p: Gauss(mean=p)
+    elif isinstance(env.action_space, gym.spaces.Discrete):
+        action_size = env.action_space.n
+        Distribution = lambda p: Discrete(logits=p)
+    else:
+        raise ValueError("Unsupported action space")
+    model = Distribution(Affine(model, action_size))
+
+    normalize = RunningNormalize(shape=inp_shape)
 
     opt = Adam(
         np.random.randn(model.n_params),
@@ -103,13 +113,28 @@ def build_agent():
         _, backprop = model.logprob.evaluate(normalize.apply(traj.o), sample=traj.a)
         opt.apply_gradient(backprop(traj.r))
 
+    def save(file_name):
+        np.savez(file_name, params=model.get_params(), norm_mean=normalize.get_mean(), norm_std=normalize.get_std())
+
+    def load(file_name):
+        nonlocal normalize
+        pars = np.load(file_name)
+        model.load_params(pars["params"])
+        mean = pars["norm_mean"]
+        stdev = pars["norm_std"]
+        def normalize(obs):
+            return obs*stdev + mean
+
+
     model.policy = lambda o: model.sample(normalize(o))
     model.train_step = train_step
+    model.save = save
+    model.load = load
     return model
 
 def save_plot(file_name, trajs, *,
         xs=lambda t: t.o[:,0],
-        ys=lambda t: t.o[:,1],
+        ys=lambda t: t.o[:,2],
         color=lambda t: ["b", "r"][np.argmax(t.a[0])]):
     import matplotlib.pyplot as plt
     plt.clf()
@@ -118,8 +143,8 @@ def save_plot(file_name, trajs, *,
             xs(t), ys(t),
             color=color(t), alpha=0.2, linewidth=2, zorder=1
         )
-    plt.gcf().axes[0].set_ylim([-0.075, 0.075])
-    plt.gcf().axes[0].set_xlim([-1.25, 0.5])
+    plt.gcf().axes[0].set_ylim([-36., 36.])
+    plt.gcf().axes[0].set_xlim([-88, 88])
     plt.gcf().set_size_inches(10, 8)
     plt.gcf().savefig(file_name, dpi=100)
 
@@ -189,7 +214,7 @@ def curiosity(world):
     if not os.path.exists(log_dir):
         os.mkdir(log_dir)
 
-    agent = build_agent()
+    agent = build_agent(world)
     scorer = traj_scorer(world)
     train = trainer(agent, world, scorer)
 
@@ -201,7 +226,7 @@ def curiosity(world):
 
         if (ep % 20) == 0:
             scorer.plot(log_dir + "/%04d.png"%ep, unnormalize)
-            np.savez(log_dir + "/%04d.npz"%ep, params=agent.get_params())
+            agent.save(log_dir + "/%04d.npz"%ep)
 
 
 def render(world, agent_files):
@@ -211,15 +236,23 @@ def render(world, agent_files):
         old_render()
         time.sleep(0.01)
     world.render = betterRender
-    agent = build_agent()
+    agent = build_agent(world)
     for fn in agent_files:
-        pars = np.load(fn)
-        agent.load_params(pars["params"])
-        #doesn't work, needs normalize params
+        agent.load(fn)
         episode(world, agent.policy, render=True)
 
+def make_env():
+    env = gym.make("CartPole-v1")
+    orig_step = env.step
+    def step(action):
+        env.unwrapped.steps_beyond_done = None
+        o, r, _, i = orig_step(action)
+        return o, -abs(o[0]), False, i
+    env.step = step
+    return env
+
 def run():
-    world = gym.make("MountainCarContinuous-v0")
+    world = make_env()
 
     if len(sys.argv) >= 2:
         render(world, sys.argv[1:])
