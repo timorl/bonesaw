@@ -15,9 +15,6 @@ from mannequin.gym import *
 from mannequin.backprop import autograd
 from mannequin.distrib import Gauss
 
-GEN_SEGM_LEN = 50
-TRAJ_LEN = 200
-
 def DKLUninormal(*, mean, logstd):
     @autograd
     def dkl(mean, logstd):
@@ -31,30 +28,29 @@ def DKLUninormal(*, mean, logstd):
 
     return Function(mean, logstd, f=dkl, shape=())
 
-def build_vae():
+def build_vae(*shape):
     def build_hidden(layer):
         for _ in range(2):
             layer = Tanh(Affine(layer, 128))
         return layer
 
     LATENT_SIZE=3
-    normalize = RunningNormalize(shape=(2*GEN_SEGM_LEN,), horizon=50)
+    normalize = RunningNormalize(shape=shape, horizon=50)
 
-    encoder = build_hidden(Input(2*GEN_SEGM_LEN))
+    encoder = build_hidden(Input(*shape))
 
     encoder = Gauss(mean=Affine(encoder, LATENT_SIZE), logstd=Affine(encoder, LATENT_SIZE))
     dkl = DKLUninormal(mean=encoder.mean, logstd=encoder.logstd)
 
     decoder_input = Input(LATENT_SIZE)
     decoder = build_hidden(decoder_input)
-    decoder = Gauss(mean=Affine(decoder, 2*GEN_SEGM_LEN), logstd=Affine(decoder, 2*GEN_SEGM_LEN))
+    decoder = Gauss(mean=Affine(decoder, *shape), logstd=Affine(decoder, *shape))
 
     encOptimizer = Adam(encoder.get_params(), horizon=10, lr=0.01)
     decOptimizer = Adam(decoder.get_params(), horizon=10, lr=0.01)
 
     class Result:
         def train(inps):
-            assert(len(inps.shape) == 2)
             inps = normalize(inps)
             encoder.load_params(encOptimizer.get_value())
             decoder.load_params(decOptimizer.get_value())
@@ -84,7 +80,6 @@ def build_vae():
             return decoder.mean(lats)*normalize.get_std() + normalize.get_mean()
 
         def DKL(inps):
-            assert(len(inps.shape) == 2)
             inps = normalize.apply(inps)
             encoder.load_params(encOptimizer.get_value())
             return dkl(inps)
@@ -128,11 +123,12 @@ def save_plot(file_name, trajs, *,
     plt.gcf().set_size_inches(10, 8)
     plt.gcf().savefig(file_name, dpi=100)
 
-def traj_scorer():
-    imagination = build_vae()
+def traj_scorer(env):
+    GEN_SEGM_LEN = 50
+    imagination = build_vae(GEN_SEGM_LEN, *env.observation_space.low.shape)
     old_agent_trajs = []
     def get_segment_at(obs, start):
-        return obs[start:start+GEN_SEGM_LEN,:].reshape(2*GEN_SEGM_LEN)
+        return obs[start:start+GEN_SEGM_LEN]
     def split_into_segments(obs):
         assert(len(obs) >= GEN_SEGM_LEN)
         result = []
@@ -143,7 +139,7 @@ def traj_scorer():
         start = np.random.randint(len(obs) - GEN_SEGM_LEN + 1)
         return get_segment_at(obs, start)
     def imagine(how_many):
-        generated_obs = [go.reshape(-1, 2) for go in imagination.generate(how_many)]
+        generated_obs = imagination.generate(how_many)
         return [Trajectory(go, [[1,0]]*GEN_SEGM_LEN) for go in generated_obs]
     def frolic():
         nonlocal old_agent_trajs
@@ -175,7 +171,7 @@ def trainer(agent, world, scorer):
     rewardNormalize = RunningNormalize(horizon=10)
 
     def train(trainAgent=True):
-        agent_traj = episode(world, agent.policy, max_steps=TRAJ_LEN)
+        agent_traj = episode(world, agent.policy, max_steps=200)
 
         agent_traj_curio = scorer.score(agent_traj)
 
@@ -194,7 +190,7 @@ def curiosity(world):
         os.mkdir(log_dir)
 
     agent = build_agent()
-    scorer = traj_scorer()
+    scorer = traj_scorer(world)
     train = trainer(agent, world, scorer)
 
     def unnormalize(obs):
