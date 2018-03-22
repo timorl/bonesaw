@@ -17,7 +17,6 @@ from mannequin.distrib import Gauss
 
 GEN_SEGM_LEN = 50
 TRAJ_LEN = 200
-GEN_SEGM_DIFF = TRAJ_LEN//GEN_SEGM_LEN
 
 def DKLUninormal(*, mean, logstd):
     @autograd
@@ -32,53 +31,6 @@ def DKLUninormal(*, mean, logstd):
 
     return Function(mean, logstd, f=dkl, shape=())
 
-def Split(inner):
-    secondEvaluate = None
-    class First(Layer):
-        def __init__(self):
-
-            def evaluate(inps):
-                nonlocal secondEvaluate
-                firstResult = None
-                firstBackprop = None
-                firstGrad = None
-                def backprop(grad, output=None):
-                    nonlocal firstGrad
-                    assert(firstGrad is None)
-                    firstGrad = grad
-                    return []
-
-                firstResult, firstBackprop = inner.evaluate(inps)
-                def newEvaluate(inps):
-                    nonlocal firstResult
-                    def newBackprop(grad, output=None):
-                        nonlocal firstGrad, firstBackprop
-                        firstGrad += grad
-                        result = firstBackprop(firstGrad, output=output)
-                        firstBackprop = None
-                        firstGrad = None
-                        return result
-                    res = firstResult
-                    firstResult = None
-                    return res, newBackprop
-                assert(secondEvaluate is None)
-                secondEvaluate = newEvaluate
-                return firstResult, backprop
-
-            super().__init__(evaluate=evaluate, shape=inner.shape, n_params=0)
-    class Second(Layer):
-        def __init__(self):
-
-            def evaluate(inps):
-                nonlocal secondEvaluate
-                eva = secondEvaluate
-                secondEvaluate = None
-                return eva(inps)
-
-            super().__init__(evaluate=evaluate, shape=inner.shape, n_params=inner.n_params, get_params=inner.get_params, load_params=inner.load_params)
-
-    return First(), Second()
-
 def build_vae():
     def build_hidden(layer):
         for _ in range(2):
@@ -87,17 +39,13 @@ def build_vae():
 
     LATENT_SIZE=3
     encoder = build_hidden(Input(2*GEN_SEGM_LEN))
-    encoder = Split(encoder)
-    encoder = Affine(encoder[0], LATENT_SIZE), Affine(encoder[1], LATENT_SIZE)
 
-    dkl = DKLUninormal(mean=encoder[0], logstd=encoder[1])
-    encoder = Gauss(mean=encoder[0], logstd=encoder[1])
+    encoder = Gauss(mean=Affine(encoder, LATENT_SIZE), logstd=Affine(encoder, LATENT_SIZE))
+    dkl = DKLUninormal(mean=encoder.mean, logstd=encoder.logstd)
 
     decoder_input = Input(LATENT_SIZE)
     decoder = build_hidden(decoder_input)
-    decoder = Split(decoder)
-    decoder_params = Affine(decoder[0], 2*GEN_SEGM_LEN), Affine(decoder[1], 2*GEN_SEGM_LEN)
-    decoder = Gauss(mean=decoder_params[0], logstd=decoder_params[1])
+    decoder = Gauss(mean=Affine(decoder, 2*GEN_SEGM_LEN), logstd=Affine(decoder, 2*GEN_SEGM_LEN))
 
     encOptimizer = Adam(encoder.get_params(), horizon=10, lr=0.01)
     decOptimizer = Adam(decoder.get_params(), horizon=10, lr=0.01)
@@ -130,9 +78,7 @@ def build_vae():
             decoder.load_params(decOptimizer.get_value())
 
             lats = np.random.randn(n, LATENT_SIZE)*2
-            result, _ = decoder_params[0](lats), decoder_params[1](lats)
-
-            return result
+            return decoder.mean(lats)
 
         def DKL(inps):
             assert(len(inps.shape) == 2)
@@ -147,12 +93,10 @@ def build_vae():
     return Result
 
 def build_agent():
-    import autograd.numpy as autonum
     model = Input(2)
     model = LReLU(Affine(model, 32))
     model = LReLU(Affine(model, 32))
-    model = Function(Const([1.1]), Tanh(Affine(model, 1)), f=autograd(autonum.multiply))
-    model = Gauss(mean=model)
+    model = Gauss(mean=Affine(model, 1))
 
     opt = Adam(
         np.random.randn(model.n_params),
@@ -185,6 +129,7 @@ def save_plot(file_name, trajs, *,
     plt.gcf().savefig(file_name, dpi=100)
 
 def traj_scorer():
+    GEN_SEGM_DIFF = TRAJ_LEN//GEN_SEGM_LEN
     imagination = build_vae()
     old_agent_trajs = []
     def get_segment_at(obs, start):
@@ -213,17 +158,15 @@ def traj_scorer():
         agent_obs = np.array([pick_segment(at.o) for at in old_agent_trajs])
         imagination.train(agent_obs)
     def curious(obs):
-        obs = split_into_segments(obs)
-        rewards = imagination.DKL(obs)-imagination.logprob(obs)
+        segmented_obs = split_into_segments(obs)
+        rewards = imagination.DKL(segmented_obs)-imagination.logprob(segmented_obs)
         max_reward = np.max(rewards)
-        def c(r):
-            return np.zeros(len(r)) + max_reward
-        return c
+        return np.zeros(len(obs)) + max_reward
 
     class Result:
         def score(agent_traj):
             old_agent_trajs.append(agent_traj)
-            for _ in range(16):
+            for _ in range(8):
                 frolic()
             return agent_traj.modified(rewards=curious(agent_traj.o))
         def plot(file_name, transform=lambda x: x):
@@ -242,7 +185,7 @@ def trainer(agent, world, scorer):
 
         agent_traj_curio = scorer.score(agent_traj)
 
-        print(bar(np.mean(agent_traj_curio.r), 100.))
+        print(bar(np.mean(agent_traj_curio.r), 200.))
 
         agent_traj_curio = agent_traj_curio.discounted(horizon=200)
         agent_traj_curio = agent_traj_curio.modified(rewards=rewardNormalize)
