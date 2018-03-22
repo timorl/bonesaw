@@ -77,7 +77,7 @@ def build_vae():
         def generate(n):
             decoder.load_params(decOptimizer.get_value())
 
-            lats = np.random.randn(n, LATENT_SIZE)*2
+            lats = np.random.randn(n, LATENT_SIZE)
             return decoder.mean(lats)
 
         def DKL(inps):
@@ -94,14 +94,14 @@ def build_vae():
 
 def build_agent():
     model = Input(2)
-    model = LReLU(Affine(model, 32))
-    model = LReLU(Affine(model, 32))
+    model = Tanh(Affine(model, 64))
+    model = Tanh(Affine(model, 64))
     model = Gauss(mean=Affine(model, 1))
 
     opt = Adam(
         np.random.randn(model.n_params),
         lr=0.01,
-        horizon=20,
+        horizon=10,
     )
     def train_step(traj):
         model.load_params(opt.get_value())
@@ -129,44 +129,38 @@ def save_plot(file_name, trajs, *,
     plt.gcf().savefig(file_name, dpi=100)
 
 def traj_scorer():
-    GEN_SEGM_DIFF = TRAJ_LEN//GEN_SEGM_LEN
     imagination = build_vae()
     old_agent_trajs = []
     def get_segment_at(obs, start):
-        return obs[start::GEN_SEGM_DIFF,:].reshape(2*GEN_SEGM_LEN)
-    def fill_obs(obs):
-        result = [o for o in obs]
-        for _ in range(TRAJ_LEN - len(obs)):
-            result.append(obs[-1])
-        return np.array(result)
+        return obs[start:start+GEN_SEGM_LEN,:].reshape(2*GEN_SEGM_LEN)
     def split_into_segments(obs):
-        obs = fill_obs(obs)
+        assert(len(obs) >= GEN_SEGM_LEN)
         result = []
-        for start in range(GEN_SEGM_DIFF):
+        for start in range(len(obs) - GEN_SEGM_LEN + 1):
             result.append(get_segment_at(obs, start))
         return np.array(result)
     def pick_segment(obs):
-        obs = fill_obs(obs)
-        start = np.random.randint(GEN_SEGM_DIFF)
+        start = np.random.randint(len(obs) - GEN_SEGM_LEN + 1)
         return get_segment_at(obs, start)
     def imagine(how_many):
         generated_obs = [go.reshape(-1, 2) for go in imagination.generate(how_many)]
         return [Trajectory(go, [[1,0]]*GEN_SEGM_LEN) for go in generated_obs]
     def frolic():
         nonlocal old_agent_trajs
-        old_agent_trajs = old_agent_trajs[-128:]
+        old_agent_trajs = old_agent_trajs[-512:]
         agent_obs = np.array([pick_segment(at.o) for at in old_agent_trajs])
         imagination.train(agent_obs)
     def curious(obs):
         segmented_obs = split_into_segments(obs)
-        rewards = imagination.DKL(segmented_obs)-imagination.logprob(segmented_obs)
-        max_reward = np.max(rewards)
-        return np.zeros(len(obs)) + max_reward
+        rewards = imagination.DKL(segmented_obs)
+        result = np.zeros(len(obs)) + np.mean(rewards)
+        result[:len(rewards)] = rewards
+        return result
 
     class Result:
         def score(agent_traj):
             old_agent_trajs.append(agent_traj)
-            for _ in range(8):
+            for _ in range(16):
                 frolic()
             return agent_traj.modified(rewards=curious(agent_traj.o))
         def plot(file_name, transform=lambda x: x):
@@ -208,7 +202,7 @@ def curiosity(world):
         return (obs * world.get_std()) + world.get_mean()
 
     for ep in range(2000):
-        train(ep>50)
+        train(ep>300)
 
         if (ep % 20) == 0:
             scorer.plot(log_dir + "/%04d.png"%ep, unnormalize)
