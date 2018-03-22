@@ -217,18 +217,14 @@ def traj_scorer():
         rewards = imagination.DKL(obs)-imagination.logprob(obs)
         max_reward = np.max(rewards)
         def c(r):
-            result = [mean_reward for _ in range(GEN_SEGM_LEN)]
-            for i in range(len(r) - GEN_SEGM_LEN):
-                result.append(rewards[i])
-            return result
+            return np.zeros(len(r)) + max_reward
         return c
 
     class Result:
-        def score(agent_traj, train):
+        def score(agent_traj):
             old_agent_trajs.append(agent_traj)
-            if train:
-                for _ in range(4):
-                    frolic()
+            for _ in range(16):
+                frolic()
             return agent_traj.modified(rewards=curious(agent_traj.o))
         def plot(file_name, transform=lambda x: x):
             generated_trajs = imagine(50)
@@ -240,30 +236,17 @@ def traj_scorer():
 
 def trainer(agent, world, scorer):
     rewardNormalize = RunningNormalize(horizon=10)
-    train_imagination = True
-    satisfaction = 0.
 
     def train():
-        nonlocal train_imagination, satisfaction
         agent_traj = episode(world, agent.policy, max_steps=TRAJ_LEN)
 
-        agent_traj_curio = scorer.score(agent_traj, train_imagination)
+        agent_traj_curio = scorer.score(agent_traj)
 
         print(bar(np.mean(agent_traj_curio.r), 100.))
 
         agent_traj_curio = agent_traj_curio.discounted(horizon=200)
         agent_traj_curio = agent_traj_curio.modified(rewards=rewardNormalize)
-
-        rew_mean = np.mean(agent_traj_curio.r)
-        if train_imagination:
-            satisfaction += max(0., -rew_mean)
-        else:
-            satisfaction += max(0., rew_mean)
-            agent.train_step(agent_traj_curio)
-        if satisfaction > 20.:
-            print("Switcheroo!")
-            satisfaction = 0.
-            train_imagination = not train_imagination
+        agent.train_step(agent_traj_curio)
 
     return train
 
